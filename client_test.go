@@ -1,6 +1,8 @@
 package webfunction
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -381,6 +383,45 @@ func TestObjectInContext(t *testing.T) {
 	}
 	if obj := pkg.ObjectInContext("does-not-exist", ArgumentContext); obj != nil {
 		t.Fatal("expected unknown object to resolve to nil")
+	}
+}
+
+// TestGzipResponse is a regression test for a real bug found running the
+// available-api-versions example against api.reservepay.com: this client
+// sends its own "Accept-Encoding: gzip" header (matching the reference
+// clients), which disables Go's automatic gzip decompression - Go only
+// auto-decompresses when *it* added that header. Without manual
+// decompression, a gzip-compressing server hands back raw gzip bytes that
+// fail JSON parsing on the 0x1f magic byte.
+func TestGzipResponse(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
+		payload, err := json.Marshal(map[string]any{"ok": true})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		if _, err := gz.Write(payload); err != nil {
+			t.Fatalf("gzip write: %v", err)
+		}
+		if err := gz.Close(); err != nil {
+			t.Fatalf("gzip close: %v", err)
+		}
+		w.Header().Set("Content-Encoding", "gzip")
+		w.WriteHeader(http.StatusOK)
+		w.Write(buf.Bytes())
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	result, err := Execute(ts.URL+"/ping", ExecuteOptions{})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	obj, ok := result.(map[string]any)
+	if !ok || obj["ok"] != true {
+		t.Fatalf("expected {ok: true} after gunzipping, got %#v", result)
 	}
 }
 

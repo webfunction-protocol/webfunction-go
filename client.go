@@ -3,7 +3,6 @@ package webfunction
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 )
@@ -105,7 +104,7 @@ func FromURL(rawURL string, opts Options) (*Client, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponseBody(resp)
 	if err != nil {
 		return nil, fmt.Errorf("reading response from %s: %w", rawURL, err)
 	}

@@ -2,6 +2,7 @@ package webfunction
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -105,7 +106,7 @@ func Execute(url string, opts ExecuteOptions) (any, error) {
 	}
 	defer resp.Body.Close()
 
-	rawBody, err := io.ReadAll(resp.Body)
+	rawBody, err := readResponseBody(resp)
 	if err != nil {
 		return nil, fmt.Errorf("reading response from %s: %w", url, err)
 	}
@@ -140,4 +141,28 @@ func Execute(url string, opts ExecuteOptions) (any, error) {
 	}
 
 	return result, nil
+}
+
+// readResponseBody reads resp.Body, transparently gunzipping it if the
+// server compressed it (Content-Encoding: gzip).
+//
+// This is needed because we set our own "Accept-Encoding: gzip" header
+// (to match the reference clients' request headers) - Go's net/http
+// Transport only auto-decompresses gzip responses when *it* added that
+// header itself; if the caller sets Accept-Encoding explicitly, as we do,
+// Transport leaves the response body exactly as the server sent it and
+// does no decompression. Without this, a gzip-compressing server (like
+// api.reservepay.com) would hand back raw gzip bytes that fail JSON
+// parsing with something like "invalid character '\x1f' looking for
+// beginning of value" - 0x1f being the gzip magic byte.
+func readResponseBody(resp *http.Response) ([]byte, error) {
+	if resp.Header.Get("Content-Encoding") != "gzip" {
+		return io.ReadAll(resp.Body)
+	}
+	gz, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("decompressing gzip response: %w", err)
+	}
+	defer gz.Close()
+	return io.ReadAll(gz)
 }
